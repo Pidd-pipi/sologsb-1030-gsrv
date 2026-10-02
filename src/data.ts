@@ -59,6 +59,7 @@ const project: ChecklistProject = {
   reviewNote: '',
   stages: structuredClone(stages),
   items: structuredClone(items),
+  signoffs: [],
   revisions: [
     {
       id: 'revision-2',
@@ -67,7 +68,10 @@ const project: ChecklistProject = {
       createdAt: '2026-09-20T04:20:00.000Z',
       note: '训练飞行前发布版本',
       stages: structuredClone(stages),
-      items: structuredClone(items.filter((entry) => entry.id !== 'item-pressurization').map((entry) => entry.id === 'item-flaps' ? { ...entry, response: 'CHECKED' } : entry))
+      items: structuredClone(items.filter((entry) => entry.id !== 'item-pressurization').map((entry) => entry.id === 'item-flaps' ? { ...entry, response: 'CHECKED' } : entry)),
+      signoffs: [],
+      // 旧版本冻结时尚无角色与签认留痕，按只读历史记录展示。
+      legacy: true
     },
     {
       id: 'revision-1',
@@ -76,7 +80,9 @@ const project: ChecklistProject = {
       createdAt: '2026-09-12T07:30:00.000Z',
       note: '初始基线',
       stages: structuredClone(stages.slice(0, 5)),
-      items: structuredClone(items.filter((entry) => entry.id !== 'item-pressurization' && entry.id !== 'item-landing-clear'))
+      items: structuredClone(items.filter((entry) => entry.id !== 'item-pressurization' && entry.id !== 'item-landing-clear')),
+      signoffs: [],
+      legacy: true
     }
   ]
 };

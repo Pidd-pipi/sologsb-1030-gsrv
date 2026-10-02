@@ -121,13 +121,68 @@ kbd { border: 1px solid var(--gray-a7); border-bottom-width: 2px; border-radius:
 .help-list div { display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 12px; font-size: 12px; }
 .help-list kbd { justify-self: start; }
 
+/* 角色切换 */
+.role-switcher { display: flex; align-items: center; gap: 4px; padding: 3px; border: 1px solid var(--gray-a5); border-radius: 12px; background: var(--gray-a2); }
+.role-tab { border: 0; border-radius: 9px; padding: 6px 13px; font-size: 12px; font-weight: 800; color: var(--gray-11); background: transparent; cursor: pointer; }
+.role-tab:hover { background: var(--gray-a4); color: var(--gray-12); }
+.role-tab.active { color: #fff; }
+.role-tab.role-captain.active { background: #1d4ed8; }
+.role-tab.role-reviewer.active { background: #c81e2e; }
+.role-tab.role-librarian.active { background: #b7791f; }
+.role-name-input { width: 118px; }
+.role-name-input .rt-TextFieldInput { height: 28px; font-size: 12px; }
+
+/* 越权拒绝横幅 */
+.denied-banner {
+  position: sticky; top: 68px; z-index: 28; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 20px; background: var(--red-9); color: #fff; font-size: 12px; font-weight: 700;
+  animation: deny-slide .18s ease;
+}
+.denied-banner button { border: 0; background: transparent; color: #fff; font-size: 16px; cursor: pointer; line-height: 1; }
+@keyframes deny-slide { from { transform: translateY(-100%); } to { transform: translateY(0); } }
+
+/* 关键项签认 */
+.signoff-panel { display: grid; gap: 8px; }
+.signoff-history { margin-top: 4px; }
+.signoff-history summary { font-size: 11px; color: var(--gray-10); cursor: pointer; }
+.signoff-history-row { display: grid; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--gray-a4); font-size: 10px; }
+.signoff-history-row small { color: var(--red-10); }
+.signoff-page { max-width: 980px; }
+.batch-list { display: grid; gap: 13px; margin-top: 18px; }
+.batch-card { padding: 14px 16px; border: 1px solid var(--gray-a5); }
+.batch-card.executable { border-color: var(--green-a7); }
+.batch-card.signed { background: color-mix(in srgb, var(--green-a2) 55%, var(--color-panel-solid)); }
+.batch-chip { display: inline-grid; place-items: center; min-width: 52px; padding: 3px 9px; border-radius: 8px; background: var(--gray-12); color: var(--gray-1); font-size: 11px; font-weight: 900; }
+.batch-items { display: grid; gap: 8px; }
+.batch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--gray-a5); border-left-width: 4px; border-radius: 10px; background: var(--color-panel); }
+.batch-row.is-signed { border-left-color: var(--green-9); }
+.batch-row.is-invalid { border-left-color: var(--red-9); background: color-mix(in srgb, var(--red-a2) 45%, var(--color-panel-solid)); }
+.batch-row-copy { min-width: 0; }
+.batch-row-copy code { font: 11px ui-monospace, monospace; color: var(--gray-11); }
+.batch-row-copy p.rt-Text { margin-top: 4px; }
+.blocker-list { margin: 6px 0 0; padding-left: 18px; }
+.freeze-form { display: grid; gap: 12px; margin-top: 14px; }
+.freeze-form label { display: grid; gap: 6px; }
+.freeze-form span { font-size: 12px; font-weight: 700; }
+
+/* 打印留痕 */
+.print-audit { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 11px 14px; margin-bottom: 14px; border: 1px solid var(--gray-a6); border-radius: 10px; background: var(--gray-a2); }
+.print-audit div { display: grid; gap: 3px; min-width: 0; }
+.print-audit span { font-size: 10px; color: var(--gray-10); }
+.print-audit strong { font-size: 12px; word-break: break-word; }
+.signoff-na { color: var(--gray-9); }
+.signoff-signed { color: var(--green-11); font-weight: 700; font-size: 11px; }
+.signoff-invalid { color: var(--red-11); font-weight: 700; font-size: 11px; }
+.signoff-unsigned { color: #9a6700; font-weight: 700; font-size: 11px; }
+.signoff-ledger { margin-top: 18px; padding-top: 14px; border-top: 2px solid var(--gray-12); break-inside: avoid; }
+
 @media (max-width: 1320px) {
   .editor-grid { grid-template-columns: 210px minmax(570px, 1fr) 315px; }
   .workflow-step { min-width: 160px; }
 }
 @media print {
   body { min-width: 0; background: white; }
-  .topbar, .workflow-bar, .main-tabs, .stage-sidebar, .inspector, .list-heading, .quick-entry, .stage-list, .preview-dialog .rt-DialogTitle, .preview-dialog .rt-DialogDescription, .preview-dialog .rt-Flex { display: none !important; }
+  .topbar, .denied-banner, .workflow-bar, .main-tabs, .stage-sidebar, .inspector, .list-heading, .quick-entry, .stage-list, .preview-dialog .rt-DialogTitle, .preview-dialog .rt-DialogDescription, .preview-dialog .rt-Flex { display: none !important; }
   .workspace { padding: 0; }
   .content-page { max-width: none; padding: 0; }
   .print-sheet { border: 0; box-shadow: none; border-radius: 0; padding: 0; }

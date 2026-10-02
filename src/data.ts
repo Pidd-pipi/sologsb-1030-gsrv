@@ -59,6 +59,7 @@ const project: ChecklistProject = {
   reviewNote: '',
   stages: structuredClone(stages),
   items: structuredClone(items),
+  signOffs: [],
   revisions: [
     {
       id: 'revision-2',
@@ -84,5 +85,6 @@ const project: ChecklistProject = {
 export const createInitialState = (): WorkspaceState => ({
   schemaVersion: 1,
   selectedProjectId: project.id,
+  currentRole: 'captain',
   projects: [project]
 });

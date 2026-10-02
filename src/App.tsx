@@ -22,8 +22,9 @@ import {
   Tooltip
 } from '@radix-ui/themes';
 import { buildVersionOptions, diffVersions } from './diff';
-import { useChecklistStore } from './store';
-import type { ChecklistItem, ChecklistProject, IssueLevel, ValidationIssue, WorkflowStatus } from './types';
+import { isItemSigned, useChecklistStore } from './store';
+import { ROLE_LABELS } from './types';
+import type { ChecklistItem, ChecklistProject, IssueLevel, Role, ValidationIssue, WorkflowStatus } from './types';
 import { validateProject } from './validation';
 
 const statusMeta: Record<WorkflowStatus, { label: string; color: 'gray' | 'amber' | 'green'; description: string }> = {
@@ -45,6 +46,16 @@ function escapeHtml(value: string): string {
 function App() {
   const store = useChecklistStore();
   const project = store.selectedProject;
+  const role = store.currentRole;
+
+  // 按角色与状态划分操作边界：越权控件一律禁用， store 内另有兜底拒绝。
+  const canEditItems = store.can('item:write') && project.status === 'draft';
+  const canEditStages = store.can('stage:write') && project.status === 'draft';
+  const canEditProject = store.can('project:write') && project.status === 'draft';
+  const canSignOff = store.can('signoff:manage') && project.status !== 'frozen';
+  const canSubmit = store.can('workflow:submit') && project.status === 'draft';
+  const canFreeze = store.can('workflow:freeze') && project.status === 'review' && store.allCriticalSigned;
+  const canRevise = store.can('workflow:revise') && project.status === 'frozen';
   const [appearance, setAppearance] = useState<'light' | 'dark'>(() => (localStorage.getItem('sologsb-1030-theme') === 'dark' ? 'dark' : 'light'));
   const [search, setSearch] = useState('');
   const [selectedItemId, setSelectedItemId] = useState(project.items[0]?.id ?? '');
@@ -59,6 +70,7 @@ function App() {
   const [leftVersion, setLeftVersion] = useState('current');
   const [rightVersion, setRightVersion] = useState(project.revisions[0]?.id ?? '');
   const [savePulse, setSavePulse] = useState(false);
+  const [viewingRevisionId, setViewingRevisionId] = useState<string | null>(null);
   const challengeRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -157,7 +169,17 @@ function App() {
 
   function exportPrintableHtml() {
     const stageOrder = project.stages.slice().sort((a, b) => a.order - b.order);
-    const body = stageOrder.map((stage) => {
+    const criticalItems = project.items.filter((item) => item.critical).sort((a, b) => a.order - b.order);
+    const signOffRows = criticalItems.map((item) => {
+      const signOff = project.signOffs.find((entry) => entry.itemId === item.id);
+      const signed = isItemSigned(project, item);
+      const status = signed ? '已签认' : signOff ? `失效：${signOff.invalidReason ?? '内容已变更'}` : '未签认';
+      return `<tr><td>${escapeHtml(item.challenge)}</td><td>${signOff ? ROLE_LABELS[signOff.signedBy] : '—'}</td><td>${signOff ? new Date(signOff.signedAt).toLocaleString('zh-CN') : '—'}</td><td>${escapeHtml(status)}</td></tr>`;
+    }).join('');
+    const signOffSection = criticalItems.length
+      ? `<section><h2>关键项签认</h2><p>关键项内容、顺序或前置条件改动后签认立即失效，重新确认前不得冻结。</p><table><thead><tr><th>关键项</th><th>签认角色</th><th>签认时间</th><th>状态 / 失效原因</th></tr></thead><tbody>${signOffRows}</tbody></table></section>`
+      : '';
+    const body = signOffSection + stageOrder.map((stage) => {
       const rows = project.items.filter((item) => item.stageId === stage.id).sort((a, b) => a.order - b.order).map((item) => `
         <tr><td>${item.critical ? '<strong>◆</strong> ' : ''}${escapeHtml(item.challenge)}</td><td>${escapeHtml(item.response || '未填写')}</td><td>${escapeHtml(item.abnormalProcedure || '—')}</td></tr>
       `).join('');
@@ -210,6 +232,17 @@ function App() {
                 {store.state.projects.map((entry) => <Select.Item key={entry.id} value={entry.id}>{entry.name}</Select.Item>)}
               </Select.Content>
             </Select.Root>
+            <Select.Root value={role} onValueChange={(value) => store.setRole(value as Role)}>
+              <Select.Trigger aria-label="切换值班角色" variant="soft" className="role-trigger">
+                <span className="role-dot" data-role={role} />
+                {ROLE_LABELS[role]}
+              </Select.Trigger>
+              <Select.Content position="popper">
+                <Select.Item value="captain">机长 · 维护检查项</Select.Item>
+                <Select.Item value="reviewer">复核员 · 签认关键项</Select.Item>
+                <Select.Item value="librarian">资料员 · 整理飞行阶段</Select.Item>
+              </Select.Content>
+            </Select.Root>
             <Button variant="soft" onClick={store.addProject}>新建项目</Button>
           </div>
           <div className="top-actions">
@@ -234,10 +267,25 @@ function App() {
           </div>
           <Flex gap="2" align="center" wrap="wrap">
             <Badge color={statusMeta[project.status].color} size="2">r{project.revision} · {statusMeta[project.status].label}</Badge>
+            <Tooltip content={`当前值班：${ROLE_LABELS[role]}。${role === 'captain' ? '可维护检查项' : role === 'reviewer' ? '可签认关键项并冻结' : '可整理飞行阶段'}。越权操作将被拒绝。`}>
+              <Badge variant="soft" size="2"><span className="role-dot" data-role={role} />{ROLE_LABELS[role]}</Badge>
+            </Tooltip>
+            {store.criticalItems.length > 0 && (
+              <Tooltip content="关键项全部签认后才可冻结；内容、顺序或前置条件改动会使签认立即失效。">
+                <Badge color={store.allCriticalSigned ? 'green' : 'red'} size="2">
+                  可执行批次 {store.criticalItems.filter((item) => isItemSigned(project, item)).length}/{store.criticalItems.length} 已签认
+                </Badge>
+              </Tooltip>
+            )}
             <Text size="1" color="gray">{errors ? `${errors} 个阻断` : '无阻断问题'} · {warnings} 个警告</Text>
-            {project.status === 'draft' && <Button color="amber" onClick={store.submitForReview} disabled={errors > 0}>提交复核</Button>}
-            {project.status === 'review' && <Button color="green" onClick={() => setFreezeOpen(true)} disabled={errors > 0}>复核通过并冻结</Button>}
-            {project.status === 'frozen' && <Button onClick={store.createRevision}>创建修订 r{project.revision + 1}</Button>}
+            {project.status === 'draft' && <Button color="amber" onClick={store.submitForReview} disabled={errors > 0 || !canSubmit}>提交复核</Button>}
+            {project.status === 'review' && (
+              <>
+                <Button color="green" onClick={() => setFreezeOpen(true)} disabled={errors > 0 || !canFreeze}>复核通过并冻结</Button>
+                <Button variant="soft" onClick={store.returnToDraft} disabled={!canSubmit}>退回编辑</Button>
+              </>
+            )}
+            {project.status === 'frozen' && <Button onClick={store.createRevision} disabled={!canRevise}>创建修订 r{project.revision + 1}</Button>}
             <Button variant="soft" onClick={() => setShowPreview(true)}>只读预览</Button>
             <Button variant="soft" onClick={() => window.print()}>打印</Button>
             <Button variant="soft" onClick={exportPrintableHtml}>导出打印版</Button>
@@ -257,7 +305,7 @@ function App() {
                 <aside className="stage-sidebar">
                   <Flex justify="between" align="center" mb="3">
                     <Heading size="3">飞行阶段</Heading>
-                    <Button size="1" variant="soft" disabled={project.status !== 'draft'} onClick={store.addStage}>＋阶段</Button>
+                    <Button size="1" variant="soft" disabled={!canEditStages} onClick={store.addStage}>＋阶段</Button>
                   </Flex>
                   <ScrollArea type="auto" scrollbars="vertical" style={{ height: 'calc(100vh - 250px)' }}>
                     <div className="stage-nav">
@@ -275,8 +323,8 @@ function App() {
                   </ScrollArea>
                   <Card className="project-card">
                     <Text size="1" color="gray">项目资料</Text>
-                    <label><span>检查单名称</span><TextField.Root value={project.name} disabled={project.status !== 'draft'} onChange={(event) => store.updateProject({ name: event.target.value })} /></label>
-                    <label><span>机型 / 注册号</span><TextField.Root value={project.aircraft} disabled={project.status !== 'draft'} onChange={(event) => store.updateProject({ aircraft: event.target.value })} /></label>
+                    <label><span>检查单名称</span><TextField.Root value={project.name} disabled={!canEditProject} onChange={(event) => store.updateProject({ name: event.target.value })} /></label>
+                    <label><span>机型 / 注册号</span><TextField.Root value={project.aircraft} disabled={!canEditProject} onChange={(event) => store.updateProject({ aircraft: event.target.value })} /></label>
                   </Card>
                 </aside>
 
@@ -288,13 +336,13 @@ function App() {
                   {project.status !== 'draft' && <Callout.Root color={project.status === 'review' ? 'amber' : 'green'} mb="4"><Callout.Text>{statusMeta[project.status].description} 当前内容不能直接编辑。</Callout.Text></Callout.Root>}
 
                   <div className="quick-entry">
-                    <Select.Root value={quickStageId || undefined} onValueChange={setQuickStageId} disabled={project.status !== 'draft'}>
+                    <Select.Root value={quickStageId || undefined} onValueChange={setQuickStageId} disabled={!canEditItems}>
                       <Select.Trigger variant="soft" aria-label="新检查项所属阶段" />
                       <Select.Content position="popper">{project.stages.map((stage) => <Select.Item key={stage.id} value={stage.id}>{stage.name}</Select.Item>)}</Select.Content>
                     </Select.Root>
-                    <TextField.Root ref={challengeRef} value={newChallenge} disabled={project.status !== 'draft'} placeholder="挑战语，如 起飞构型（按 / 聚焦）" onChange={(event) => setNewChallenge(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) quickAddItem(); }} />
-                    <TextField.Root value={newResponse} disabled={project.status !== 'draft'} placeholder="预期回应" onChange={(event) => setNewResponse(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) quickAddItem(); }} />
-                    <Button disabled={project.status !== 'draft' || !newChallenge.trim()} onClick={quickAddItem}>新增</Button>
+                    <TextField.Root ref={challengeRef} value={newChallenge} disabled={!canEditItems} placeholder="挑战语，如 起飞构型（按 / 聚焦）" onChange={(event) => setNewChallenge(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) quickAddItem(); }} />
+                    <TextField.Root value={newResponse} disabled={!canEditItems} placeholder="预期回应" onChange={(event) => setNewResponse(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) quickAddItem(); }} />
+                    <Button disabled={!canEditItems || !newChallenge.trim()} onClick={quickAddItem}>新增</Button>
                     <Text size="1" color="gray">Ctrl/⌘+Enter</Text>
                   </div>
 
@@ -305,13 +353,13 @@ function App() {
                           <div className="drag-handle" title="阶段排序">⋮⋮</div>
                           <div className="stage-title">
                             <span className="sequence-chip">{stageIndex + 1}</span>
-                            <input aria-label={`${stage.name} 阶段名称`} value={stage.name} disabled={project.status !== 'draft'} onChange={(event) => store.updateStage(stage.id, { name: event.target.value })} />
-                            <TextField.Root value={stage.description} disabled={project.status !== 'draft'} onChange={(event) => store.updateStage(stage.id, { description: event.target.value })} />
+                            <input aria-label={`${stage.name} 阶段名称`} value={stage.name} disabled={!canEditStages} onChange={(event) => store.updateStage(stage.id, { name: event.target.value })} />
+                            <TextField.Root value={stage.description} disabled={!canEditStages} onChange={(event) => store.updateStage(stage.id, { description: event.target.value })} />
                           </div>
                           <Flex gap="1">
-                            <Button size="1" variant="soft" disabled={project.status !== 'draft' || stage.order === 0} onClick={() => store.moveStage(stage.id, -1)}>上移</Button>
-                            <Button size="1" variant="soft" disabled={project.status !== 'draft' || stage.order === project.stages.length - 1} onClick={() => store.moveStage(stage.id, 1)}>下移</Button>
-                            <Button size="1" color="red" variant="soft" disabled={project.status !== 'draft' || items.length > 0} onClick={() => store.deleteStage(stage.id)}>删除</Button>
+                            <Button size="1" variant="soft" disabled={!canEditStages || stage.order === 0} onClick={() => store.moveStage(stage.id, -1)}>上移</Button>
+                            <Button size="1" variant="soft" disabled={!canEditStages || stage.order === project.stages.length - 1} onClick={() => store.moveStage(stage.id, 1)}>下移</Button>
+                            <Button size="1" color="red" variant="soft" disabled={!canEditStages || items.length > 0} onClick={() => store.deleteStage(stage.id)}>删除</Button>
                           </Flex>
                         </div>
                         <div className="item-table">
@@ -321,9 +369,9 @@ function App() {
                               <article
                                 key={item.id}
                                 className={`checklist-row ${selectedItemId === item.id ? 'selected' : ''}`}
-                                draggable={project.status === 'draft'}
+                                draggable={canEditItems}
                                 onDragStart={(event) => event.dataTransfer.setData('text/plain', item.id)}
-                                onDragOver={(event) => { if (project.status === 'draft') event.preventDefault(); }}
+                                onDragOver={(event) => { if (canEditItems) event.preventDefault(); }}
                                 onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer.getData('text/plain'); if (source) store.reorderItem(source, item.id, true); }}
                                 onClick={() => setSelectedItemId(item.id)}
                               >
@@ -332,6 +380,7 @@ function App() {
                                   <Flex gap="2" align="center" wrap="wrap">
                                     <strong>{item.challenge || '未命名检查项'}</strong>
                                     {item.critical && <Badge color="red" size="1">关键</Badge>}
+                                    {item.critical && <SignOffBadge project={project} item={item} />}
                                     {item.preconditionIds.length > 0 && <Badge color="blue" size="1">{item.preconditionIds.length} 前置</Badge>}
                                     {itemIssues.length > 0 && <Badge color={itemIssues.some((issue) => issue.level === 'error') ? 'red' : 'amber'} size="1">{itemIssues.length} 问题</Badge>}
                                   </Flex>
@@ -339,15 +388,15 @@ function App() {
                                   {item.abnormalProcedure && <small>异常：{item.abnormalProcedure}</small>}
                                 </div>
                                 <div className="row-actions">
-                                  <Button size="1" variant="ghost" disabled={project.status !== 'draft'} onClick={(event) => { event.stopPropagation(); store.nudgeItem(item.id, -1); }}>↑</Button>
-                                  <Button size="1" variant="ghost" disabled={project.status !== 'draft'} onClick={(event) => { event.stopPropagation(); store.nudgeItem(item.id, 1); }}>↓</Button>
-                                  <Button size="1" variant="ghost" disabled={project.status !== 'draft'} onClick={(event) => { event.stopPropagation(); duplicateItem(item); }}>复制</Button>
-                                  <Button size="1" color="red" variant="ghost" disabled={project.status !== 'draft'} onClick={(event) => { event.stopPropagation(); if (window.confirm(`删除“${item.challenge}”？`)) store.deleteItem(item.id); }}>删除</Button>
+                                  <Button size="1" variant="ghost" disabled={!canEditItems} onClick={(event) => { event.stopPropagation(); store.nudgeItem(item.id, -1); }}>↑</Button>
+                                  <Button size="1" variant="ghost" disabled={!canEditItems} onClick={(event) => { event.stopPropagation(); store.nudgeItem(item.id, 1); }}>↓</Button>
+                                  <Button size="1" variant="ghost" disabled={!canEditItems} onClick={(event) => { event.stopPropagation(); duplicateItem(item); }}>复制</Button>
+                                  <Button size="1" color="red" variant="ghost" disabled={!canEditItems} onClick={(event) => { event.stopPropagation(); if (window.confirm(`删除“${item.challenge}”？`)) store.deleteItem(item.id); }}>删除</Button>
                                 </div>
                               </article>
                             );
                           })}
-                          {!items.length && <button className="empty-row" disabled={project.status !== 'draft'} onClick={() => { setQuickStageId(stage.id); challengeRef.current?.focus(); }}>＋ 为本阶段新增第一个检查项</button>}
+                          {!items.length && <button className="empty-row" disabled={!canEditItems} onClick={() => { setQuickStageId(stage.id); challengeRef.current?.focus(); }}>＋ 为本阶段新增第一个检查项</button>}
                         </div>
                       </Card>
                     ))}
@@ -361,16 +410,16 @@ function App() {
                         <Flex justify="between" align="center" mb="3"><Heading size="4">检查项详情</Heading>{selectedItem && <Badge variant="soft">#{selectedItem.order + 1}</Badge>}</Flex>
                         {selectedItem ? (
                           <div className="inspector-form">
-                            <label><span>挑战语</span><TextField.Root value={selectedItem.challenge} disabled={project.status !== 'draft'} onChange={(event) => store.updateItem(selectedItem.id, { challenge: event.target.value })} /></label>
-                            <label><span>预期回应</span><TextField.Root value={selectedItem.response} disabled={project.status !== 'draft'} onChange={(event) => store.updateItem(selectedItem.id, { response: event.target.value })} /></label>
-                            <Flex justify="between" align="center"><Text size="2" weight="bold">关键标记</Text><Switch checked={selectedItem.critical} disabled={project.status !== 'draft'} onCheckedChange={(checked) => store.updateItem(selectedItem.id, { critical: checked })} /></Flex>
-                            <label><span>异常处理</span><TextArea value={selectedItem.abnormalProcedure} disabled={project.status !== 'draft'} onChange={(event) => store.updateItem(selectedItem.id, { abnormalProcedure: event.target.value })} placeholder="异常条件、立即动作和后续步骤" /></label>
+                            <label><span>挑战语</span><TextField.Root value={selectedItem.challenge} disabled={!canEditItems} onChange={(event) => store.updateItem(selectedItem.id, { challenge: event.target.value })} /></label>
+                            <label><span>预期回应</span><TextField.Root value={selectedItem.response} disabled={!canEditItems} onChange={(event) => store.updateItem(selectedItem.id, { response: event.target.value })} /></label>
+                            <Flex justify="between" align="center"><Text size="2" weight="bold">关键标记</Text><Switch checked={selectedItem.critical} disabled={!canEditItems} onCheckedChange={(checked) => store.updateItem(selectedItem.id, { critical: checked })} /></Flex>
+                            <label><span>异常处理</span><TextArea value={selectedItem.abnormalProcedure} disabled={!canEditItems} onChange={(event) => store.updateItem(selectedItem.id, { abnormalProcedure: event.target.value })} placeholder="异常条件、立即动作和后续步骤" /></label>
                             <div>
                               <Text size="2" weight="bold" mb="2" as="p">前置条件</Text>
                               <div className="precondition-list">
                                 {project.items.filter((item) => item.id !== selectedItem.id).sort((a, b) => a.order - b.order).map((item) => (
                                   <label key={item.id} className="check-row">
-                                    <input type="checkbox" checked={selectedItem.preconditionIds.includes(item.id)} disabled={project.status !== 'draft'} onChange={() => togglePrecondition(selectedItem, item.id)} />
+                                    <input type="checkbox" checked={selectedItem.preconditionIds.includes(item.id)} disabled={!canEditItems} onChange={() => togglePrecondition(selectedItem, item.id)} />
                                     <span>{item.challenge || '未命名'}</span>
                                   </label>
                                 ))}
@@ -379,6 +428,16 @@ function App() {
                             <Text size="1" color="gray">Alt+↑/↓ 调整顺序 · 拖动左侧把手可跨阶段移动</Text>
                           </div>
                         ) : <Text color="gray">从清单中选择一个检查项进行编辑。</Text>}
+                      </section>
+                      <Separator size="4" />
+                      <section>
+                        <Flex justify="between" align="center" mb="3">
+                          <Heading size="4">关键项签认</Heading>
+                          <Badge color={store.allCriticalSigned ? 'green' : store.criticalItems.length ? 'red' : 'gray'} size="1">
+                            {store.criticalItems.length ? `${store.criticalItems.filter((item) => isItemSigned(project, item)).length}/${store.criticalItems.length} 已签认` : '无关键项'}
+                          </Badge>
+                        </Flex>
+                        <SignOffPanel project={project} canSignOff={canSignOff} onSign={(id) => store.signOffItem(id)} onRevoke={(id) => store.revokeSignOff(id)} />
                       </section>
                       <Separator size="4" />
                       <section>
@@ -412,7 +471,27 @@ function App() {
             <Tabs.Content value="versions">
               <div className="content-page">
                 <Heading size="7">版本差异</Heading>
-                <Text color="gray" as="p">冻结版本不可修改；创建修订后形成新的编辑中版本。</Text>
+                <Text color="gray" as="p">冻结版本不可修改；创建修订后形成新的编辑中版本。旧记录无角色信息时按只读历史查看。</Text>
+                <div className="revision-list">
+                  {project.revisions.map((revision) => {
+                    const legacy = revision.frozenBy === undefined;
+                    return (
+                      <Card key={revision.id} className="revision-card">
+                        <Flex justify="between" align="center" wrap="wrap" gap="2">
+                          <Flex gap="2" align="center" wrap="wrap">
+                            <Badge color="green">r{revision.revision}</Badge>
+                            {legacy
+                              ? <Badge color="gray" variant="soft">无角色信息 · 只读历史</Badge>
+                              : <Badge color="blue" variant="soft">冻结：{ROLE_LABELS[revision.frozenBy as Role]}</Badge>}
+                            {!legacy && <Badge variant="soft" color={revision.signOffs?.every((signOff) => signOff.valid) ? 'green' : 'amber'}>签认 {revision.signOffs?.filter((signOff) => signOff.valid).length ?? 0}/{revision.signOffs?.length ?? 0}</Badge>}
+                            <Text size="1" color="gray">{new Date(revision.createdAt).toLocaleString('zh-CN')} · {revision.note}</Text>
+                          </Flex>
+                          <Button size="1" variant="soft" onClick={() => setViewingRevisionId(revision.id)}>只读查看</Button>
+                        </Flex>
+                      </Card>
+                    );
+                  })}
+                </div>
                 <div className="version-controls">
                   <label><span>基准版本</span><Select.Root value={leftVersion} onValueChange={setLeftVersion}><Select.Trigger variant="soft" /><Select.Content position="popper">{versionOptions.map((option) => <Select.Item key={option.id} value={option.id}>{option.label}</Select.Item>)}</Select.Content></Select.Root></label>
                   <span className="version-arrow">→</span>
@@ -478,15 +557,136 @@ function App() {
           <Flex justify="end" mt="4"><Dialog.Close><Button>了解了</Button></Dialog.Close></Flex>
         </Dialog.Content>
       </Dialog.Root>
+
+      <Dialog.Root open={!!viewingRevisionId} onOpenChange={(open) => { if (!open) setViewingRevisionId(null); }}>
+        <Dialog.Content maxWidth="850px" className="preview-dialog">
+          {(() => {
+            const revision = project.revisions.find((entry) => entry.id === viewingRevisionId);
+            if (!revision) return null;
+            const legacy = revision.frozenBy === undefined;
+            const synthetic: ChecklistProject = {
+              ...project,
+              id: revision.id,
+              name: `${project.name} · r${revision.revision}`,
+              revision: revision.revision,
+              status: 'frozen',
+              stages: revision.stages,
+              items: revision.items,
+              signOffs: revision.signOffs ?? [],
+              revisions: []
+            };
+            return (
+              <>
+                <Dialog.Title>只读历史快照</Dialog.Title>
+                <Dialog.Description size="2" color="gray">
+                  r{revision.revision} · {new Date(revision.createdAt).toLocaleString('zh-CN')} · {revision.note}
+                </Dialog.Description>
+                {legacy
+                  ? <Callout.Root color="gray" mb="3"><Callout.Text>该历史记录未保留角色与签认信息，按只读历史查看，不能在此版本上编辑或签认。</Callout.Text></Callout.Root>
+                  : <Callout.Root color="blue" mb="3"><Callout.Text>冻结操作：{revision.frozenBy ? ROLE_LABELS[revision.frozenBy] : '—'} · 保留 {revision.signOffs?.length ?? 0} 条签认记录。</Callout.Text></Callout.Root>}
+                <div className="dialog-scroll"><PrintableChecklist project={synthetic} compact frozenBy={revision.frozenBy} /></div>
+                <Flex gap="3" justify="end" mt="4"><Dialog.Close><Button variant="soft">关闭</Button></Dialog.Close></Flex>
+              </>
+            );
+          })()}
+        </Dialog.Content>
+      </Dialog.Root>
+
+      {store.actionError && (
+        <div className="action-toast" role="alert">
+          <span className="toast-icon">⚠</span>
+          <span>{store.actionError}</span>
+        </div>
+      )}
     </Theme>
   );
 }
 
-function PrintableChecklist({ project, compact = false }: { project: ChecklistProject; compact?: boolean }) {
+function SignOffBadge({ project, item }: { project: ChecklistProject; item: ChecklistItem }) {
+  const signOff = project.signOffs.find((entry) => entry.itemId === item.id);
+  const signed = isItemSigned(project, item);
+  if (signed && signOff) {
+    return (
+      <Tooltip content={`已由${ROLE_LABELS[signOff.signedBy]}签认于 ${new Date(signOff.signedAt).toLocaleString('zh-CN')}`}>
+        <Badge color="green" size="1">已签认</Badge>
+      </Tooltip>
+    );
+  }
+  if (signOff && !signOff.valid) {
+    return (
+      <Tooltip content={`签认失效：${signOff.invalidReason ?? '内容已变更'}（${signOff.invalidAt ? new Date(signOff.invalidAt).toLocaleString('zh-CN') : '—'}）`}>
+        <Badge color="red" size="1">签认失效</Badge>
+      </Tooltip>
+    );
+  }
+  return <Badge color="gray" size="1" variant="soft">未签认</Badge>;
+}
+
+function SignOffPanel({ project, canSignOff, onSign, onRevoke }: {
+  project: ChecklistProject;
+  canSignOff: boolean;
+  onSign: (itemId: string) => void;
+  onRevoke: (itemId: string) => void;
+}) {
+  const criticalItems = project.items.filter((item) => item.critical).sort((a, b) => a.order - b.order);
+  if (criticalItems.length === 0) {
+    return <Callout.Root color="gray"><Callout.Text>当前检查单没有关键项。机长在检查项详情中打开「关键标记」后，复核员即可在此签认。</Callout.Text></Callout.Root>;
+  }
+  return (
+    <div className="signoff-list">
+      {criticalItems.map((item) => {
+        const signOff = project.signOffs.find((entry) => entry.itemId === item.id);
+        const signed = isItemSigned(project, item);
+        return (
+          <div key={item.id} className={`signoff-row ${signed ? 'signed' : signOff ? 'invalid' : ''}`}>
+            <div className="signoff-info">
+              <strong>{item.challenge || '未命名检查项'}</strong>
+              {signed && signOff
+                ? <small className="signoff-meta ok">{ROLE_LABELS[signOff.signedBy]} · {new Date(signOff.signedAt).toLocaleString('zh-CN')} 签认</small>
+                : signOff
+                  ? <small className="signoff-meta stale">失效：{signOff.invalidReason}（{signOff.invalidAt ? new Date(signOff.invalidAt).toLocaleString('zh-CN') : '—'}）</small>
+                  : <small className="signoff-meta">尚未签认</small>}
+            </div>
+            {canSignOff && (
+              signed
+                ? <Button size="1" variant="soft" color="red" onClick={() => onRevoke(item.id)}>撤销</Button>
+                : <Button size="1" color="green" onClick={() => onSign(item.id)}>签认</Button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PrintableChecklist({ project, compact = false, frozenBy }: { project: ChecklistProject; compact?: boolean; frozenBy?: Role }) {
   const stages = project.stages.slice().sort((a, b) => a.order - b.order);
+  const criticalItems = project.items.filter((item) => item.critical).sort((a, b) => a.order - b.order);
   return (
     <article className={`print-sheet ${compact ? 'compact' : ''}`}>
-      <header><div><Heading size="7">{project.name}</Heading><Text color="gray" as="p">{project.aircraft} · r{project.revision} · {statusMeta[project.status].label}</Text></div><Badge color={statusMeta[project.status].color}>{project.items.length} 项</Badge></header>
+      <header><div><Heading size="7">{project.name}</Heading><Text color="gray" as="p">{project.aircraft} · r{project.revision} · {statusMeta[project.status].label}{frozenBy ? ` · 冻结：${ROLE_LABELS[frozenBy]}` : ''}</Text></div><Badge color={statusMeta[project.status].color}>{project.items.length} 项</Badge></header>
+      {criticalItems.length > 0 && (
+        <section className="print-signoffs">
+          <div className="print-stage-title"><span>签</span><div><Heading size="5">关键项签认</Heading><Text color="gray" size="1">关键项内容、顺序或前置条件改动后签认立即失效，重新确认前不得冻结。</Text></div></div>
+          <table>
+            <thead><tr><th style={{ width: '30%' }}>关键项</th><th style={{ width: '15%' }}>签认角色</th><th style={{ width: '22%' }}>签认时间</th><th>状态 / 失效原因</th></tr></thead>
+            <tbody>
+              {criticalItems.map((item) => {
+                const signOff = project.signOffs.find((entry) => entry.itemId === item.id);
+                const signed = isItemSigned(project, item);
+                return (
+                  <tr key={item.id}>
+                    <td>{item.challenge}</td>
+                    <td>{signOff ? ROLE_LABELS[signOff.signedBy] : '—'}</td>
+                    <td>{signOff ? new Date(signOff.signedAt).toLocaleString('zh-CN') : '—'}</td>
+                    <td>{signed ? '已签认' : signOff ? `失效：${signOff.invalidReason ?? '内容已变更'}` : '未签认'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </section>
+      )}
       {stages.map((stage, index) => (
         <section key={stage.id}>
           <div className="print-stage-title"><span>{String(index + 1).padStart(2, '0')}</span><div><Heading size="5">{stage.name}</Heading><Text color="gray" size="1">{stage.description}</Text></div></div>
